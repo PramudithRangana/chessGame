@@ -4,10 +4,6 @@ import pygame
 import chess
 
 
-# import tkinter as tk
-# from tkinter import messagebox
-
-
 class ChessGame:
     def __init__(self):
         pygame.init()  # Initialize Pygame
@@ -26,6 +22,9 @@ class ChessGame:
         self.screen = pygame.display.set_mode((self.board_size + label_space, self.board_size + label_space))
         pygame.display.set_caption("Chess Game")
 
+        # Create a history list to store move details
+        self.move_history = []
+
         # For undo, redo
         self.UNDO_EVENT = pygame.USEREVENT + 1
         self.REDO_EVENT = pygame.USEREVENT + 2
@@ -36,6 +35,8 @@ class ChessGame:
 
         self.undo_stack = []
         self.redo_stack = []
+
+        self.redo_steps = []  # New list to store redo steps
 
         # Load chess piece images
         self.piece_images = {
@@ -120,6 +121,7 @@ class ChessGame:
         # Reset any necessary game state or variables here
         # For example, reset the board, player positions, or any relevant game data
         self.initialize_game()
+        self.initialize_board()
 
         # You might also need to reinitialize any UI elements or assets
         # For example, if you display a board, reinitialize it with starting positions
@@ -158,8 +160,11 @@ class ChessGame:
                     elif self.board.is_fivefold_repetition():
                         options = ["Restart", "Exit"]  # You can add more options here if needed
                         self.response = self.display_message_with_options(f"Match Drawn !", options)
-                    # elif self.board.is_en_passant(self.target_square):
-                    #     print("Pawn en passant")
+
+                    elif self.board.is_stalemate():
+                        options = ["Restart", "Exit"]  # You can add more options here if needed
+                        self.response = self.display_message_with_options(f"Stalemate !", options)
+
                     if self.response == "Restart":
                         self.response = None
                         self.restart_game()
@@ -216,19 +221,47 @@ class ChessGame:
 
         return self.response  # Return the selected response
 
+    # It is intended to retrieve a snapshot of the current game state.
+    def get_game_state_snapshot(self):
+        return self.board.fen()
+
+    def restore_game_state(self, fen):
+        self.board.set_fen(fen)
+        # Update other game state variables if needed
+
+    def record_move(self, move_details):
+        # print('move details :', move_details)
+        self.move_history.append(move_details)  # Record the move in move_history
+
     def undo(self):
-        if len(self.undo_stack) > 0:
-            last_move = self.undo_stack.pop()
-            self.redo_stack.append(last_move)
-            self.board.pop()
-            pygame.event.post(self.redo_event)  # Post the custom redo event
+        if len(self.move_history) > 0:
+            last_move = self.move_history.pop()
+            self.redo_steps.append(last_move)  # Record the undo step for redo
+
+            # Restore the game state based on the move details
+            self.restore_game_state(last_move["game_state"])
 
     def redo(self):
-        if len(self.redo_stack) > 0:
-            next_move = self.redo_stack.pop()
-            self.undo_stack.append(next_move)
-            self.board.push(next_move)
-            pygame.event.post(self.undo_event)  # Post the custom undo event
+        if len(self.redo_steps) > 0:
+            next_move = self.redo_steps.pop()
+            self.move_history.append(next_move)  # Record the redo step in move_history
+
+            # Restore the game state based on the move details
+            self.restore_game_state(next_move["game_state"])
+
+    def get_move_details(self, selected_square, target_square):
+        move_details = {
+            "selected_square": selected_square,
+            "target_square": target_square,
+            "selected_piece": self.board.piece_at(selected_square),
+            "target_piece": self.board.piece_at(target_square),
+            "selected_piece_type": None,
+        }
+
+        if move_details["selected_piece"]:
+            move_details["selected_piece_type"] = move_details["selected_piece"].piece_type
+
+        return move_details
 
     def handle_mouse_click(self, event):
         if event.button == 1:
@@ -243,22 +276,40 @@ class ChessGame:
                 self.valid_moves = self.calculate_valid_moves(square)
                 self.target_square = None
 
+            # Display Selected stuff
             elif self.selected_piece is not None:
                 self.target_square = square
                 move = chess.Move(self.selected_piece, self.target_square)
+                move_details = {
+                    "move": move,
+                    "game_state": self.get_game_state_snapshot()
+                }
 
                 if move.to_square in self.valid_moves:
                     if (
                             self.board.piece_at(self.selected_piece).piece_type == chess.PAWN and
                             (chess.square_rank(self.target_square) == 0 or chess.square_rank(self.target_square) == 7)
                     ):
-                        self.undo_stack.append(move)  # Push the original pawn move onto the stack
+                        print("Selected Piece to Promote:", self.board.piece_at(self.selected_piece))
+                        print("Pawn Promotion Occurred")
                         self.perform_pawn_promotion(move)
+                    elif (
+                            self.board.is_capture(move) and
+                            self.board.piece_type_at(move.to_square) == chess.PAWN and
+                            (chess.square_rank(self.selected_piece) == 1 or chess.square_rank(self.selected_piece) == 6)
+                    ):
+                        print("Undoing Pawn Promotion")
+                        self.perform_pawn_demotion(move)
                     else:
+                        # Store the move details for future undo
+                        self.record_move(move_details)
+                        # Clear the redo steps
+                        self.redo_steps.clear()
+                        # Push the move onto the undo stack and update the board
                         self.undo_stack.append(move)
-                        self.redo_stack.clear()
                         self.board.push(move)
-                        pygame.event.post(self.undo_event)  # Post the custom undo event
+                        # Post the custom undo event
+                        pygame.event.post(self.undo_event)
                     self.selected_piece = None
                     self.target_square = None
 
@@ -270,10 +321,8 @@ class ChessGame:
         # Determine the color of the promoted piece
         piece_color = self.board.piece_at(move.from_square).color
 
-        # Initialize the promoted_piece variable
-        promoted_piece = None
-
         # Determine the promoted piece based on the player's choice
+        promoted_piece = None
         if promotion_piece == "Queen":
             promoted_piece = chess.Piece(chess.QUEEN, piece_color)
         elif promotion_piece == "Rook":
@@ -289,15 +338,47 @@ class ChessGame:
         # Update the board with the promoted piece
         self.board.set_piece_at(move.to_square, promoted_piece)
 
+        # Record move details for pawn promotion
+        move_details = {
+            "move": move,
+            "game_state": self.get_game_state_snapshot()
+        }
+        self.record_move(move_details)
+
         # Switch the turn to the opposite player
         self.board.turn = not self.board.turn
 
         # Update the display
         self.update_display()
 
-        # Push the promotion move onto the undo stack
-        self.undo_stack.append(move)
-        self.redo_stack.clear()
+    def perform_pawn_demotion(self, move):
+        from_square = move.to_square
+        to_square = move.from_square
+
+        # Get the promoted piece that needs to be demoted back to a pawn
+        promoted_piece = self.board.piece_at(from_square)
+
+        # Determine the original piece color
+        piece_color = promoted_piece.color
+
+        # Remove the promoted piece from the board
+        self.board.remove_piece_at(from_square)
+
+        # Set the original pawn back to the board
+        self.board.set_piece_at(to_square, chess.Piece(chess.PAWN, piece_color))
+
+        # Record move details for pawn demotion
+        move_details = {
+            "move": move,
+            "game_state": self.get_game_state_snapshot()
+        }
+        self.record_move(move_details)
+
+        # Switch the turn to the opposite player
+        self.board.turn = not self.board.turn
+
+        # Update the display
+        self.update_display()
 
     def is_king_checked(self, color):
         king_square = self.board.king(color)
