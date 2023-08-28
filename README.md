@@ -63,8 +63,3 @@ project_folder/
 
 The project utilizes the Pygame library for graphical interface and the chess library for chess-related operations.
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-
