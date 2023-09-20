@@ -66,5 +66,3 @@ The project utilizes the Pygame library for graphical interface and the chess li
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-
